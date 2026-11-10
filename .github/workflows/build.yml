@@ -1,0 +1,58 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write   # needed to create a release on tags
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build TrayAlways.exe
+        shell: cmd
+        run: build.cmd
+
+      - name: Check translations
+        shell: pwsh
+        run: |
+          $p = Start-Process bin\TrayAlways.exe -ArgumentList '--check-languages' -NoNewWindow -Wait -PassThru -RedirectStandardOutput lang-check.txt
+          Get-Content lang-check.txt
+          if ($p.ExitCode -ne 0) { throw "Translation check failed" }
+
+      - name: Checksum
+        shell: pwsh
+        run: |
+          $hash = (Get-FileHash bin\TrayAlways.exe -Algorithm SHA256).Hash
+          "$hash  TrayAlways.exe" | Set-Content bin\TrayAlways.exe.sha256 -Encoding ascii
+          Get-Content bin\TrayAlways.exe.sha256
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TrayAlways
+          path: |
+            bin/TrayAlways.exe
+            bin/TrayAlways.exe.sha256
+
+      - name: Create release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          $hash = (Get-Content bin\TrayAlways.exe.sha256).Split(' ')[0]
+          $notes = @"
+          **Download:** TrayAlways.exe below — no installer, no admin rights. Run it and click its tray icon for options.
+
+          Built by GitHub Actions from this tag. SHA-256: ``$hash``
+
+          Windows may show a SmartScreen warning because the exe is not code-signed yet: click **More info → Run anyway**.
+          "@
+          gh release create "${{ github.ref_name }}" bin/TrayAlways.exe bin/TrayAlways.exe.sha256 --title "TrayAlways ${{ github.ref_name }}" --notes "$notes" --generate-notes
